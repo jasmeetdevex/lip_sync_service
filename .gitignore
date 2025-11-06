@@ -1,0 +1,77 @@
+# =========================================
+# 🐍 Python Environment & Cache
+# =========================================
+venv/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# =========================================
+# 🤖 Model Files & Checkpoints
+# =========================================
+Wav2Lip-HD/**/*.pth
+Wav2Lip-HD/**/*.pt
+Wav2Lip-HD/**/*.ckpt
+Wav2Lip-HD/**/*.statesss
+Wav2Lip-HD/checkpoints/
+Wav2Lip-HD/runs/
+Wav2Lip-HD/logs/
+Wav2Lip-HD/results/
+Wav2Lip-HD/tb_logger/
+
+# =========================================
+# 🎬 Media Files
+# =========================================
+Wav2Lip-HD/**/*.mp4
+Wav2Lip-HD/**/*.avi
+Wav2Lip-HD/**/*.mov
+Wav2Lip-HD/**/*.mkv
+Wav2Lip-HD/**/*.wav
+Wav2Lip-HD/**/*.mp3
+Wav2Lip-HD/**/*.flac
+Wav2Lip-HD/**/*.m4a
+Wav2Lip-HD/**/*.aac
+
+
+# =========================================
+# 🎧 Root Inputs Folder Media
+# =========================================
+inputs/
+
+# =========================================
+# 📁 Temp & Output Folders
+# =========================================
+Wav2Lip-HD/output_videos_hd/
+Wav2Lip-HD/output_videos_wav2lip/
+Wav2Lip-HD/input_videos/
+Wav2Lip-HD/input_audios/
+Wav2Lip-HD/temp/
+Wav2Lip-HD/experiments/
+Wav2Lip-HD/tb_logger/
+Wav2Lip-HD/results/
+Wav2Lip-HD/wav2lip_models/
+
+Wav2Lip/wav2lip_env/
+Wav2Lip/checkpoints
+# =========================================
+# 🧰 IDE / OS Files
+# =========================================
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
+
+# =========================================
+# 🧪 Miscellaneous
+# =========================================
+*.zip
+*.tar
+*.gz
+*.log
+
+# =========================================
+# 🚀 Environment Files
+# =========================================
+.env
+.env.local
