@@ -8,6 +8,11 @@ import torch, face_detection
 from models import Wav2Lip
 import platform
 
+# Fix Unicode encoding on Windows
+if sys.platform == 'win32':
+	import io
+	sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
 parser = argparse.ArgumentParser(description='Inference code to lip-sync videos in the wild using Wav2Lip models')
 
 parser.add_argument('--checkpoint_path', type=str, 
@@ -53,6 +58,11 @@ parser.add_argument('--nosmooth', default=False, action='store_true',
 args = parser.parse_args()
 args.img_size = 96
 
+# Get the parent directory (lip_sync_service) for temp files
+SERVICE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TEMP_DIR = os.path.join(SERVICE_DIR, 'temp')
+os.makedirs(TEMP_DIR, exist_ok=True)
+
 if os.path.isfile(args.face) and args.face.split('.')[1] in ['jpg', 'png', 'jpeg']:
 	args.static = True
 
@@ -88,7 +98,8 @@ def face_detect(images):
 	pady1, pady2, padx1, padx2 = args.pads
 	for rect, image in zip(predictions, images):
 		if rect is None:
-			cv2.imwrite('temp/faulty_frame.jpg', image) # check this frame where the face was not detected.
+			faulty_frame_path = os.path.join(TEMP_DIR, 'faulty_frame.jpg')
+			cv2.imwrite(faulty_frame_path, image)
 			raise ValueError('Face not detected! Ensure the video contains a face in all the frames.')
 
 		y1 = max(0, rect[1] - pady1)
@@ -216,10 +227,10 @@ def main():
 
 	if not args.audio.endswith('.wav'):
 		print('Extracting raw audio...')
-		command = 'ffmpeg -y -i {} -strict -2 {}'.format(args.audio, 'temp/temp.wav')
-
+		temp_audio_path = os.path.join(TEMP_DIR, 'temp.wav')
+		command = 'ffmpeg -y -i {} -strict -2 {}'.format(args.audio, temp_audio_path)
 		subprocess.call(command, shell=True)
-		args.audio = 'temp/temp.wav'
+		args.audio = temp_audio_path
 
 	wav = audio.load_wav(args.audio, 16000)
 	mel = audio.melspectrogram(wav)
@@ -249,11 +260,13 @@ def main():
 	for i, (img_batch, mel_batch, frames, coords) in enumerate(tqdm(gen, 
 											total=int(np.ceil(float(len(mel_chunks))/batch_size)))):
 		if i == 0:
+			print("[BATCH 0] Loading model...")
 			model = load_model(args.checkpoint_path)
-			print ("Model loaded")
+			print("[BATCH 0] ✅ Model loaded")
 
 			frame_h, frame_w = full_frames[0].shape[:-1]
-			out = cv2.VideoWriter('temp/result.avi', 
+			result_avi_path = os.path.join(TEMP_DIR, 'result.avi')
+			out = cv2.VideoWriter(result_avi_path, 
 									cv2.VideoWriter_fourcc(*'DIVX'), fps, (frame_w, frame_h))
 
 		img_batch = torch.FloatTensor(np.transpose(img_batch, (0, 3, 1, 2))).to(device)
@@ -273,8 +286,12 @@ def main():
 
 	out.release()
 
-	command = 'ffmpeg -y -i {} -i {} -strict -2 -q:v 1 {}'.format(args.audio, 'temp/result.avi', args.outfile)
+	result_avi_path = os.path.join(TEMP_DIR, 'result.avi')
+	command = 'ffmpeg -y -i {} -i {} -strict -2 -q:v 1 {}'.format(args.audio, result_avi_path, args.outfile)
 	subprocess.call(command, shell=platform.system() != 'Windows')
+	
+	print(f"Inference complete! Output saved to: {args.outfile}")
+	sys.stdout.flush()
 
 if __name__ == '__main__':
 	main()

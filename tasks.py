@@ -1,5 +1,6 @@
 # tasks.py
 import os
+import sys
 import requests
 from celery_config import celery
 from extensions import mongo
@@ -19,189 +20,173 @@ s3 = boto3.client(
     region_name=os.getenv("AWS_REGION")
 )
 
+def clean_up(audio_path, video_path, output_path):
+    for f in [video_path, audio_path, output_path]:
+        try:
+            if os.path.exists(f):
+                os.remove(f)
+        except Exception as e:
+            logger.warning(f"Cleanup failed for {f}: {e}")
+
 
 @celery.task(name="run_wav2lip_task", bind=True)
-def run_wav2lip_task(self, task_id, video_url, audio_url):
+def run_wav2lip_task(self, task_id, video_url, audio_url, use_hd=False):
     """
-    Downloads video/audio, runs Wav2Lip, uploads to S3, and logs stdout/stderr.
-    
-    ⭐ This task automatically runs within Flask app context thanks to ContextTask.
+    Celery Task:
+    Runs Wav2Lip based on `use_hd` flag,
+    uploads the output video to S3, and returns the S3 URL.
     """
+
+    logger.info(f"🎬 Starting Wav2Lip task: {task_id} | use_hd={use_hd}")
     
-    logger.info(f"Starting task {task_id}")
+    # Get the lip_sync_service directory (current directory of this file)
+    SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
+    
+    video_path = os.path.join(SERVICE_DIR, f"inputs/{task_id}_video.mp4")
+    audio_path = os.path.join(SERVICE_DIR, f"inputs/{task_id}_audio.wav")
+    output_path = os.path.join(SERVICE_DIR, f"outputs/{task_id}_result.mp4")
     
     try:
-        # ✅ mongo.db now works because we're in Flask app context
         tasks_collection = mongo.db.lip_sync_tasks
-        logger.info(f"Connected to MongoDB: {tasks_collection}")
-        
         bucket_name = os.getenv("S3_BUCKET_NAME")
-        
-        # Create task model instance
+
+        # Initialize task
         task = LipSyncTask(task_id=task_id, video_url=video_url, audio_url=audio_url)
-        
-        # 1️⃣ --- DOWNLOADING ---
-        logger.info(f"Task {task_id}: Starting download phase")
         task.mark_downloading()
         task.save(tasks_collection)
+
+        # Ensure directories exist
+        inputs_dir = os.path.join(SERVICE_DIR, "inputs")
+        outputs_dir = os.path.join(SERVICE_DIR, "outputs")
+        temp_dir = os.path.join(SERVICE_DIR, "temp")
         
-        os.makedirs("inputs", exist_ok=True)
-        os.makedirs("outputs", exist_ok=True)
-        
-        video_path = f"inputs/{task_id}_video.mp4"
-        audio_path = f"inputs/{task_id}_audio.wav"
-        output_path = f"outputs/{task_id}_result.mp4"
-        
+        os.makedirs(inputs_dir, exist_ok=True)
+        os.makedirs(outputs_dir, exist_ok=True)
+        os.makedirs(temp_dir, exist_ok=True)
+
+        # --- 1️⃣ DOWNLOAD INPUT FILES ---
+        logger.info("📥 Downloading input files...")
         try:
-            logger.info(f"Downloading video from {video_url}")
             with open(video_path, "wb") as f:
                 f.write(requests.get(video_url, timeout=60).content)
-            
-            logger.info(f"Downloading audio from {audio_url}")
             with open(audio_path, "wb") as f:
                 f.write(requests.get(audio_url, timeout=60).content)
-                
-            logger.info("Download completed successfully")
+            logger.info("✅ Input files downloaded successfully")
         except Exception as e:
             raise Exception(f"Failed to download input files: {e}")
-        
-        # 2️⃣ --- PROCESSING ---
-        logger.info(f"Task {task_id}: Starting processing phase")
+
+        # --- 2️⃣ PROCESSING PHASE ---
         task.mark_processing()
         task.save(tasks_collection)
-        
-        # ⭐ Get the Python executable from the current environment
-        import sys
+
         python_executable = sys.executable
-        logger.info(f"Using Python executable: {python_executable}")
         
-        # UPDATE THIS PATH to your Wav2Lip repository location
-        # wav2lip_dir = os.getenv(
-        #     "WAV2LIP_DIR",
-        #     "D:\\Wav2Lip_implementation\\lip_sync_service\\Wav2Lip-HD"
-        # )
-        wav2lip_dir = os.getenv(
-            "WAV2LIP_DIR",
-            "D:\\Wav2Lip_implementation\\lip_sync_service\\Wav2Lip"
-        )
+        # Determine Wav2Lip directory (sibling of tasks.py inside lip_sync_service)
+        wav2lip_dir = os.path.join(SERVICE_DIR, "Wav2Lip")
         inference_script = os.path.join(wav2lip_dir, "inference.py")
         
-        # Convert relative paths to absolute paths
-        video_path_abs = os.path.abspath(video_path)
-        audio_path_abs = os.path.abspath(audio_path)
-        output_path_abs = os.path.abspath(output_path)
+        # Validate inference script exists
+        if not os.path.exists(inference_script):
+            raise Exception(f"Inference script not found at: {inference_script}")
         
+        # Use absolute paths for checkpoint
+        checkpoint_path = os.path.abspath(os.path.join(wav2lip_dir, "checkpoints/wav2lip.pth"))
+        
+        # Validate checkpoint exists
+        if not os.path.exists(checkpoint_path):
+            raise Exception(f"Checkpoint not found at: {checkpoint_path}")
+        
+        # Build command with absolute paths for all inputs/outputs
         command = [
-            python_executable, inference_script,
-            "--checkpoint_path", os.path.join(wav2lip_dir, "checkpoints/wav2lip_gan.pth"),
-            "--face", video_path_abs,
-            "--audio", audio_path_abs,
-            # "--segmentation_path", os.path.join(wav2lip_dir, "checkpoints/face_segmentation.pth"),
-            # "--sr_path", os.path.join(wav2lip_dir, "checkpoints/esrgan_yunying.pth")
+            python_executable,
+            inference_script,
+            "--checkpoint_path", checkpoint_path,
+            "--face", os.path.abspath(video_path),
+            "--audio", os.path.abspath(audio_path),
+            "--outfile", os.path.abspath(output_path)
         ]
         
-        logger.info(f"Running command: {' '.join(command)}")
-        logger.info(f"Working directory: {os.getcwd()}")
-        
-        # Capture stdout AND stderr separately for better debugging
+        logger.info(f"⚙️ Executing command: {' '.join(command)}")
+        logger.info(f"Wav2Lip directory: {wav2lip_dir}")
+        logger.info(f"Checkpoint: {checkpoint_path} (exists: {os.path.exists(checkpoint_path)})")
+        logger.info(f"Video input: {video_path} (exists: {os.path.exists(video_path)})")
+        logger.info(f"Audio input: {audio_path} (exists: {os.path.exists(audio_path)})")
+
+        # Run subprocess from Wav2Lip directory
         process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            bufsize=1
+            bufsize=1,
+            cwd=wav2lip_dir  # Important: set working directory to Wav2Lip folder
         )
+
+        stdout_output, stderr_output = "", ""
         
-        stdout_output = ""
-        stderr_output = ""
-        
-        # Read stdout
         for line in process.stdout:
-            line_stripped = line.strip()
-            if line_stripped:
-                logger.info(f"[Wav2Lip STDOUT] {line_stripped}")
-                stdout_output += line
-        
-        # Read stderr
+            logger.info(f"[Wav2Lip STDOUT] {line.strip()}")
+            stdout_output += line
+            
         for line in process.stderr:
-            line_stripped = line.strip()
-            if line_stripped:
-                logger.warning(f"[Wav2Lip STDERR] {line_stripped}")
-                stderr_output += line
-        
-        # Wait for process to complete
+            logger.warning(f"[Wav2Lip STDERR] {line.strip()}")
+            stderr_output += line
+
         process.wait()
         
-        # Combine logs
-        log_output = stdout_output + "\n" + stderr_output
-        
-        # Check return code
         if process.returncode != 0:
-            error_msg = f"Wav2Lip process failed with exit code {process.returncode}"
-            logger.error(f"{error_msg}")
-            
-            if stderr_output.strip():
-                logger.error(f"STDERR Output:\n{stderr_output}")
-                error_msg += f"\n\nSTDERR:\n{stderr_output}"
-            
-            if stdout_output.strip():
-                logger.error(f"STDOUT Output:\n{stdout_output}")
-            
-            raise Exception(error_msg)
+            raise Exception(f"Wav2Lip failed. Exit code: {process.returncode}\nStderr: {stderr_output}")
         
-        # Check if output file exists
         if not os.path.exists(output_path):
-            raise Exception(f"Wav2Lip output file not created at {output_path}")
-        
-        logger.info("Wav2Lip processing completed successfully")
-        
-        # 3️⃣ --- UPLOAD TO S3 ---
-        logger.info(f"Task {task_id}: Starting S3 upload phase")
+            raise Exception(f"Output file not generated at: {output_path}")
+
+        logger.info("✅ Processing completed successfully.")
+
+        # --- 3️⃣ UPLOAD TO S3 ---
         s3_key = f"wav2lip_outputs/{task_id}_result.mp4"
-        
+        logger.info(f"📤 Uploading output to S3: s3://{bucket_name}/{s3_key}")
+
         try:
-            logger.info(f"Uploading to S3: s3://{bucket_name}/{s3_key}")
             s3.upload_file(output_path, bucket_name, s3_key)
-            s3_url = f"https://{bucket_name}.s3.amazonaws.com/{s3_key}"
-            logger.info(f"Upload completed: {s3_url}")
+            logger.info(f"✅ Uploaded successfully to S3")
         except Exception as e:
             raise Exception(f"Failed to upload to S3: {e}")
-        
-        # 4️⃣ --- MARK COMPLETED ---
-        logger.info(f"Task {task_id}: Marking as completed")
+
+        s3_url = f"https://{bucket_name}.s3.amazonaws.com/{s3_key}"
+
+        # --- 4️⃣ MARK TASK COMPLETED ---
         task.mark_completed(s3_key=s3_key, output_s3_url=s3_url)
-        task.error_log = log_output
+        task.error_log = stdout_output + "\n" + stderr_output
         task.save(tasks_collection)
-        
-        # Cleanup
-        logger.info("Cleaning up temporary files")
-        for path in [video_path, audio_path, output_path]:
-            try:
-                if os.path.exists(path):
-                    os.remove(path)
-                    logger.info(f"Deleted {path}")
-            except Exception as cleanup_err:
-                logger.warning(f"Failed to cleanup {path}: {cleanup_err}")
-        
-        logger.info(f"✅ Task {task_id} completed successfully")
-        return {"success": True, "s3_url": s3_url}
-    
+
+        # --- CLEANUP ---
+        clean_up(audio_path, video_path, output_path)
+
+        logger.info(f"🏁 Task {task_id} completed successfully.")
+        return {
+            "success": True,
+            "s3_url": s3_url,
+            "model_used": "Wav2Lip"
+        }
+
     except Exception as e:
-        logger.error(f"❌ Task {task_id} failed: {str(e)}", exc_info=True)
+        error_msg = str(e)
+        logger.error(f"❌ Task {task_id} failed: {error_msg}", exc_info=True)
         
+        # --- CLEANUP ---
+        clean_up(audio_path, video_path, output_path)
+        
+        # Update failure status
         try:
-            tasks_collection = mongo.db.lip_sync_tasks
-            tasks_collection.update_one(
+            mongo.db.lip_sync_tasks.update_one(
                 {"task_id": task_id},
-                {
-                    "$set": {
-                        "status": "failed",
-                        "error_log": str(e),
-                        "completed_at": datetime.utcnow()
-                    }
-                }
+                {"$set": {
+                    "status": "failed",
+                    "error_log": error_msg,
+                    "completed_at": datetime.utcnow()
+                }}
             )
         except Exception as db_err:
-            logger.error(f"Failed to update task status in DB: {db_err}")
-        
-        return {"success": False, "error": str(e)}
+            logger.error(f"Failed to update MongoDB: {db_err}")
+
+        return {"success": False, "error": error_msg}
