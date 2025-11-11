@@ -7,8 +7,30 @@ from models.lipSyncTasksModal import LipSyncTask
 from extensions import mongo
 import logging
 
+
 logger = logging.getLogger(__name__)
 
+
+def run_task_directly(video_url, audio_url, use_hd=False):
+    """
+    Runs a Wav2Lip task synchronously (bypasses Celery).
+    Ideal for local testing/debugging.
+
+    Args:
+        video_url (str): URL or path of the video file
+        audio_url (str): URL or path of the audio file
+        use_hd (bool): If True, use HD processing
+    Returns:
+        dict: Task result (success/failure + output path)
+    """
+    import uuid
+    task_id = f"test_{uuid.uuid4()}"
+    
+    # Call the Celery task function directly without .apply_async
+    # Pass None as 'self' because Celery binds the task to 'self'
+    result = run_wav2lip_task(None, task_id, video_url, audio_url, use_hd)
+    
+    return result
 
 def submit_task(video_url, audio_url):
     """
@@ -59,7 +81,7 @@ def submit_task(video_url, audio_url):
         
         # Submit background Celery task
         # Use .apply_async for more control over task submission
-        celery_result = run_wav2lip_task.apply_async(
+        celery_result = run_wav2lip_task.apply_async(   
             args=[task_id, video_url.strip(), audio_url.strip()],
             task_id=task_id,  # Use same ID for tracking
             retry=True,

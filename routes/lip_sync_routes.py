@@ -15,13 +15,14 @@ def submitNewTask():
             raise Exception("Please provide image and video urls")
         
         response  = lip_sync_controller.submit_task(audio_url=audio_url , video_url=video_url)
+        # response  = lip_sync_controller.run_task_directly(audio_url=audio_url , video_url=video_url)
         if response.get("task_id"):
             return jsonify({"success": True , "task_id" : response.get("task_id") })
         else:
             raise Exception(response.get("error" , "Something went wrong"))
     except Exception as e:
         return jsonify({"error" : str(e)}), 400
-    
+
 
 @bp.route("/status", methods=["GET"])
 def getTaskStatus():

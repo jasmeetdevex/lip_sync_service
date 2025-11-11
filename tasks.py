@@ -3,13 +3,15 @@ import os
 import sys
 import requests
 from celery_config import celery
+from dotenv import load_dotenv
 from extensions import mongo
 from datetime import datetime
 import subprocess
 import boto3
 from models.lipSyncTasksModal import LipSyncTask
 import logging
-
+import threading
+load_dotenv()
 logger = logging.getLogger(__name__)
 
 # S3 client
@@ -45,7 +47,7 @@ def run_wav2lip_task(self, task_id, video_url, audio_url, use_hd=False):
     video_path = os.path.join(SERVICE_DIR, f"inputs/{task_id}_video.mp4")
     audio_path = os.path.join(SERVICE_DIR, f"inputs/{task_id}_audio.wav")
     output_path = os.path.join(SERVICE_DIR, f"outputs/{task_id}_result.mp4")
-    
+    print("----------------" , SERVICE_DIR)
     try:
         tasks_collection = mongo.db.lip_sync_tasks
         bucket_name = os.getenv("S3_BUCKET_NAME")
@@ -85,6 +87,8 @@ def run_wav2lip_task(self, task_id, video_url, audio_url, use_hd=False):
         wav2lip_dir = os.path.join(SERVICE_DIR, "Wav2Lip")
         inference_script = os.path.join(wav2lip_dir, "inference.py")
         
+        print("INFERENCE PATH : " , inference_script)
+
         # Validate inference script exists
         if not os.path.exists(inference_script):
             raise Exception(f"Inference script not found at: {inference_script}")
@@ -92,11 +96,16 @@ def run_wav2lip_task(self, task_id, video_url, audio_url, use_hd=False):
         # Use absolute paths for checkpoint
         checkpoint_path = os.path.abspath(os.path.join(wav2lip_dir, "checkpoints/wav2lip.pth"))
         
+        print("CHECKPOINTS PATH : " , checkpoint_path)
         # Validate checkpoint exists
         if not os.path.exists(checkpoint_path):
             raise Exception(f"Checkpoint not found at: {checkpoint_path}")
         
         # Build command with absolute paths for all inputs/outputs
+
+        print("python exec : " , python_executable)
+
+
         command = [
             python_executable,
             inference_script,
@@ -118,9 +127,58 @@ def run_wav2lip_task(self, task_id, video_url, audio_url, use_hd=False):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            bufsize=1,
-            cwd=wav2lip_dir  # Important: set working directory to Wav2Lip folder
+            bufsize=1,  # Line buffering
+            cwd=wav2lip_dir
         )
+
+        stdout_output = ""
+        stderr_output = ""
+
+        # Use threading to read stdout and stderr simultaneously
+        # This prevents deadlock when buffers fill up
+        def read_stdout():
+            nonlocal stdout_output
+            try:
+                for line in process.stdout:
+                    line = line.strip()
+                    if line:
+                        logger.info(f"[Wav2Lip STDOUT] {line}")
+                        stdout_output += line + "\n"
+            except Exception as e:
+                logger.error(f"Error reading stdout: {e}")
+
+        def read_stderr():
+            nonlocal stderr_output
+            try:
+                for line in process.stderr:
+                    line = line.strip()
+                    if line:
+                        logger.warning(f"[Wav2Lip STDERR] {line}")
+                        stderr_output += line + "\n"
+            except Exception as e:
+                logger.error(f"Error reading stderr: {e}")
+
+        # Start threads to read output
+        stdout_thread = threading.Thread(target=read_stdout, daemon=True)
+        stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+        
+        stdout_thread.start()
+        stderr_thread.start()
+
+        # Wait for process to complete
+        process.wait()
+        
+        # Wait for threads to finish reading
+        stdout_thread.join(timeout=5)
+        stderr_thread.join(timeout=5)
+        
+        if process.returncode != 0:
+            raise Exception(f"Wav2Lip failed. Exit code: {process.returncode}\nStderr: {stderr_output}")
+        
+        if not os.path.exists(output_path):
+            raise Exception(f"Output file not generated at: {output_path}")
+
+        logger.info("✅ Processing completed successfully.")
 
         stdout_output, stderr_output = "", ""
         

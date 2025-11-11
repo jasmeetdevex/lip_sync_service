@@ -5,8 +5,9 @@ import json, subprocess, random, string
 from tqdm import tqdm
 from glob import glob
 import torch, face_detection
-from models import Wav2Lip
+from models import  Wav2Lip
 import platform
+import sys
 
 # Fix Unicode encoding on Windows
 if sys.platform == 'win32':
@@ -190,108 +191,128 @@ def load_model(path):
 	return model.eval()
 
 def main():
-	if not os.path.isfile(args.face):
-		raise ValueError('--face argument must be a valid path to video/image file')
+    if not os.path.isfile(args.face):
+        raise ValueError('--face argument must be a valid path to video/image file')
 
-	elif args.face.split('.')[1] in ['jpg', 'png', 'jpeg']:
-		full_frames = [cv2.imread(args.face)]
-		fps = args.fps
+    elif args.face.split('.')[-1] in ['jpg', 'png', 'jpeg']:
+        full_frames = [cv2.imread(args.face)]
+        fps = args.fps
+        print("[DEBUG] Single image detected, fps set to", fps)
 
-	else:
-		video_stream = cv2.VideoCapture(args.face)
-		fps = video_stream.get(cv2.CAP_PROP_FPS)
+    else:
+        video_stream = cv2.VideoCapture(args.face)
+        fps = video_stream.get(cv2.CAP_PROP_FPS)
+        print("[DEBUG] Video detected, fps:", fps)
+        sys.stdout.flush()
 
-		print('Reading video frames...')
+        print('Reading video frames...')
+        sys.stdout.flush()
+        full_frames = []
+        frame_count = 0
+        while True:
+            still_reading, frame = video_stream.read()
+            if not still_reading:
+                video_stream.release()
+                break
 
-		full_frames = []
-		while 1:
-			still_reading, frame = video_stream.read()
-			if not still_reading:
-				video_stream.release()
-				break
-			if args.resize_factor > 1:
-				frame = cv2.resize(frame, (frame.shape[1]//args.resize_factor, frame.shape[0]//args.resize_factor))
+            frame_count += 1
+            if frame_count % 50 == 0:
+                print(f"[DEBUG] Read {frame_count} frames...")
+                sys.stdout.flush()
 
-			if args.rotate:
-				frame = cv2.rotate(frame, cv2.cv2.ROTATE_90_CLOCKWISE)
+            if args.resize_factor > 1:
+                frame = cv2.resize(frame, (frame.shape[1]//args.resize_factor, frame.shape[0]//args.resize_factor))
 
-			y1, y2, x1, x2 = args.crop
-			if x2 == -1: x2 = frame.shape[1]
-			if y2 == -1: y2 = frame.shape[0]
+            if args.rotate:
+                frame = cv2.rotate(frame, cv2.cv2.ROTATE_90_CLOCKWISE)
 
-			frame = frame[y1:y2, x1:x2]
+            y1, y2, x1, x2 = args.crop
+            if x2 == -1:
+                x2 = frame.shape[1]
+            if y2 == -1:
+                y2 = frame.shape[0]
 
-			full_frames.append(frame)
+            frame = frame[y1:y2, x1:x2]
+            full_frames.append(frame)
 
-	print ("Number of frames available for inference: "+str(len(full_frames)))
+    print("[DEBUG] Total frames available for inference:", len(full_frames))
+    sys.stdout.flush()
 
-	if not args.audio.endswith('.wav'):
-		print('Extracting raw audio...')
-		temp_audio_path = os.path.join(TEMP_DIR, 'temp.wav')
-		command = 'ffmpeg -y -i {} -strict -2 {}'.format(args.audio, temp_audio_path)
-		subprocess.call(command, shell=True)
-		args.audio = temp_audio_path
+    if not args.audio.endswith('.wav'):
+        print('Extracting raw audio...')
+        temp_audio_path = os.path.join(TEMP_DIR, 'temp.wav')
+        command = 'ffmpeg -y -i {} -strict -2 {}'.format(args.audio, temp_audio_path)
+        subprocess.call(command, shell=True)
+        args.audio = temp_audio_path
 
-	wav = audio.load_wav(args.audio, 16000)
-	mel = audio.melspectrogram(wav)
-	print(mel.shape)
+    print("[DEBUG] Loading audio...")
+    wav = audio.load_wav(args.audio, 16000)
+    print("[DEBUG] Audio loaded, length:", len(wav))
 
-	if np.isnan(mel.reshape(-1)).sum() > 0:
-		raise ValueError('Mel contains nan! Using a TTS voice? Add a small epsilon noise to the wav file and try again')
+    mel = audio.melspectrogram(wav)
+    print("[DEBUG] Mel spectrogram shape:", mel.shape)
 
-	mel_chunks = []
-	mel_idx_multiplier = 80./fps 
-	i = 0
-	while 1:
-		start_idx = int(i * mel_idx_multiplier)
-		if start_idx + mel_step_size > len(mel[0]):
-			mel_chunks.append(mel[:, len(mel[0]) - mel_step_size:])
-			break
-		mel_chunks.append(mel[:, start_idx : start_idx + mel_step_size])
-		i += 1
+    if np.isnan(mel.reshape(-1)).sum() > 0:
+        raise ValueError('Mel contains nan! Using a TTS voice? Add a small epsilon noise to the wav file and try again')
 
-	print("Length of mel chunks: {}".format(len(mel_chunks)))
+    print("[DEBUG] Generating mel chunks...")
+    mel_chunks = []
+    mel_idx_multiplier = 80. / fps
+    i = 0
+    while True:
+        start_idx = int(i * mel_idx_multiplier)
+        if start_idx + mel_step_size > len(mel[0]):
+            mel_chunks.append(mel[:, len(mel[0]) - mel_step_size:])
+            print(f"[DEBUG] Last chunk appended, total chunks: {len(mel_chunks)}")
+            break
+        mel_chunks.append(mel[:, start_idx : start_idx + mel_step_size])
+        if i % 10 == 0:
+            print(f"[DEBUG] Generated {i+1} mel chunks...")
+        i += 1
 
-	full_frames = full_frames[:len(mel_chunks)]
+    print("[DEBUG] Total mel chunks generated:", len(mel_chunks))
+    sys.stdout.flush()
 
-	batch_size = args.wav2lip_batch_size
-	gen = datagen(full_frames.copy(), mel_chunks)
+    full_frames = full_frames[:len(mel_chunks)]
 
-	for i, (img_batch, mel_batch, frames, coords) in enumerate(tqdm(gen, 
-											total=int(np.ceil(float(len(mel_chunks))/batch_size)))):
-		if i == 0:
-			print("[BATCH 0] Loading model...")
-			model = load_model(args.checkpoint_path)
-			print("[BATCH 0] ✅ Model loaded")
+    batch_size = args.wav2lip_batch_size
+    gen = datagen(full_frames.copy(), mel_chunks)
 
-			frame_h, frame_w = full_frames[0].shape[:-1]
-			result_avi_path = os.path.join(TEMP_DIR, 'result.avi')
-			out = cv2.VideoWriter(result_avi_path, 
-									cv2.VideoWriter_fourcc(*'DIVX'), fps, (frame_w, frame_h))
+    for i, (img_batch, mel_batch, frames, coords) in enumerate(tqdm(gen,
+                                            total=int(np.ceil(float(len(mel_chunks))/batch_size)))):
+        if i == 0:
+            print("[BATCH 0] Loading model...")
+            model = load_model(args.checkpoint_path)
+            print("[BATCH 0] ✅ Model loaded")
 
-		img_batch = torch.FloatTensor(np.transpose(img_batch, (0, 3, 1, 2))).to(device)
-		mel_batch = torch.FloatTensor(np.transpose(mel_batch, (0, 3, 1, 2))).to(device)
+            frame_h, frame_w = full_frames[0].shape[:-1]
+            result_avi_path = os.path.join(TEMP_DIR, 'result.avi')
+            out = cv2.VideoWriter(result_avi_path,
+                                    cv2.VideoWriter_fourcc(*'DIVX'), fps, (frame_w, frame_h))
 
-		with torch.no_grad():
-			pred = model(mel_batch, img_batch)
+        img_batch = torch.FloatTensor(np.transpose(img_batch, (0, 3, 1, 2))).to(device)
+        mel_batch = torch.FloatTensor(np.transpose(mel_batch, (0, 3, 1, 2))).to(device)
 
-		pred = pred.cpu().numpy().transpose(0, 2, 3, 1) * 255.
-		
-		for p, f, c in zip(pred, frames, coords):
-			y1, y2, x1, x2 = c
-			p = cv2.resize(p.astype(np.uint8), (x2 - x1, y2 - y1))
+        with torch.no_grad():
+            pred = model(mel_batch, img_batch)
 
-			f[y1:y2, x1:x2] = p
-			out.write(f)
+        pred = pred.cpu().numpy().transpose(0, 2, 3, 1) * 255.
 
-	out.release()
+        for p, f, c in zip(pred, frames, coords):
+            y1, y2, x1, x2 = c
+            p = cv2.resize(p.astype(np.uint8), (x2 - x1, y2 - y1))
+            f[y1:y2, x1:x2] = p
+            out.write(f)
 
-	result_avi_path = os.path.join(TEMP_DIR, 'result.avi')
-	command = 'ffmpeg -y -i {} -i {} -strict -2 -q:v 1 {}'.format(args.audio, result_avi_path, args.outfile)
-	subprocess.call(command, shell=platform.system() != 'Windows')
-	
-	print(f"Inference complete! Output saved to: {args.outfile}")
-	sys.stdout.flush()
+    out.release()
+
+    result_avi_path = os.path.join(TEMP_DIR, 'result.avi')
+    command = 'ffmpeg -y -i {} -i {} -strict -2 -q:v 1 {}'.format(args.audio, result_avi_path, args.outfile)
+    subprocess.call(command, shell=platform.system() != 'Windows')
+
+    print(f"[DEBUG] Inference complete! Output saved to: {args.outfile}")
+    sys.stdout.flush()
+
 
 if __name__ == '__main__':
-	main()
+    main()
