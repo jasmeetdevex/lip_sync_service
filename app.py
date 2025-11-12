@@ -12,7 +12,7 @@ def create_app():
     # Configuration
     ENV = os.getenv("ENV", "development")  # default to development
     MONGO_LIVE_URI = os.getenv("MONGO_LIVE_URI")
-    MONGO_LOCAL_URI = "mongodb+srv://narratixdev:sltgyS9EjJPqfXQw@narratixcluster.00fijbr.mongodb.net/narratixdb?retryWrites=true&w=majority&appName=NarratixCluster"
+    MONGO_LOCAL_URI = "mongodb://localhost:27017/smcps"
 
     if ENV == "production":
         app.config["MONGO_URI"] = MONGO_LIVE_URI
