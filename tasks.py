@@ -94,7 +94,7 @@ def run_wav2lip_task(self, task_id, video_url, audio_url, use_hd=False):
             raise Exception(f"Inference script not found at: {inference_script}")
         
         # Use absolute paths for checkpoint
-        checkpoint_path = os.path.abspath(os.path.join(wav2lip_dir, "checkpoints/wav2lip_gan.pth"))
+        checkpoint_path = os.path.abspath(os.path.join(wav2lip_dir, "checkpoints/wav2lip.pth"))
         
         print("CHECKPOINTS PATH : " , checkpoint_path)
         # Validate checkpoint exists
