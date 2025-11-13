@@ -28,28 +28,32 @@ s3 = boto3.client(
     aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
     region_name=os.getenv("AWS_REGION")
 )
+
 def monitor_vram_usage():
-        """Monitor VRAM usage in background thread"""
-        global peak_vram, vram_samples, monitoring, vram_lock
-        
-        while monitoring:
-            try:
-                result = subprocess.run(
-                    "nvidia-smi --query-gpu=memory.used --format=csv,nounits,noheader",
-                    shell=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=5
-                )
-                vram_used = float(result.stdout.strip().split()[0])
+    """Monitor VRAM usage in background thread"""
+    global peak_vram, vram_samples, monitoring, vram_lock
+    
+    while monitoring:
+        try:
+            result = subprocess.run(
+                "nvidia-smi --query-gpu=memory.used --format=csv,nounits,noheader",
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                vram_used = float(result.stdout.strip().split('\n')[0].strip())
                 
                 with vram_lock:
                     vram_samples.append(vram_used)
                     peak_vram = max(peak_vram, vram_used)
-            except Exception as e:
-                logger.debug(f"VRAM monitoring error: {e}")
-            
-            time.sleep(0.1)  # Sample every 100ms
+            else:
+                logger.debug("nvidia-smi returned no output or failed")
+        except Exception as e:
+            logger.debug(f"VRAM monitoring error: {e}")
+        
+        time.sleep(0.1)  # Sample every 100ms
 
 
 def get_total_gpu_vram():
@@ -62,7 +66,11 @@ def get_total_gpu_vram():
             text=True,
             timeout=5
         )
-        return float(result.stdout.strip().split()[0])
+        if result.returncode == 0 and result.stdout.strip():
+            return float(result.stdout.strip().split('\n')[0].strip())
+        else:
+            logger.warning("nvidia-smi returned no output for total VRAM")
+            return 0
     except Exception as e:
         logger.warning(f"Failed to get total GPU VRAM: {e}")
         return 0
@@ -108,9 +116,10 @@ def clean_up(file_paths):
         try:
             if f and os.path.exists(f):
                 os.remove(f)
+                logger.debug(f"Cleaned up: {f}")
         except Exception as e:
             logger.warning(f"Cleanup failed for {f}: {e}")
-    
+
 
 def run_inference_with_retry(python_executable, inference_script, checkpoint_path, video_path, audio_path, output_path, wav2lip_dir, model_type="non-gan", max_retries=2):
     """
@@ -132,7 +141,7 @@ def run_inference_with_retry(python_executable, inference_script, checkpoint_pat
             return stdout, stderr, wall_time, vram_stats
         except Exception as e:
             error_str = str(e)
-            if "ArrayMemoryError" in error_str or "out of memory" in error_str.lower():
+            if "ArrayMemoryError" in error_str or "out of memory" in error_str.lower() or "CUDA out of memory" in error_str:
                 if attempt < len(resize_factors[:max_retries + 1]) - 1:
                     logger.warning(f"⚠️ Memory error on attempt {attempt + 1}. Retrying with higher resize_factor...")
                     # Clean up partial output if it exists
@@ -142,19 +151,24 @@ def run_inference_with_retry(python_executable, inference_script, checkpoint_pat
                     except:
                         pass
                     continue
-            raise
-    
+            # If it's not a memory error or we're out of retries, re-raise
+            raise e
 
 
 def run_inference(python_executable, inference_script, checkpoint_path, video_path, audio_path, output_path, wav2lip_dir, model_type="non-gan", resize_factor=1):
     """
     Run Wav2Lip inference with enhanced parameters and memory optimization
+    Returns: (stdout, stderr, wall_clock_time, vram_stats)
     
     Args:
         model_type: "non-gan" or "gan"
     """
     
-    logger.info(f"🎬 Starting {model_type.upper()} inference...")
+    logger.info(f"🎬 Starting {model_type.upper()} inference with resize_factor={resize_factor}...")
+    
+    # Start VRAM monitoring
+    monitor_thread = start_vram_monitoring()
+    inference_start = time.time()
     
     # Enhanced parameters for better output with memory optimization
     command = [
@@ -194,7 +208,7 @@ def run_inference(python_executable, inference_script, checkpoint_path, video_pa
 
     def read_output(pipe, output_list, prefix):
         try:
-            for line in pipe:
+            for line in iter(pipe.readline, ''):
                 line = line.strip()
                 if line:
                     logger.info(f"[{prefix}] {line}")
@@ -219,10 +233,18 @@ def run_inference(python_executable, inference_script, checkpoint_path, video_pa
     
     stdout_thread.start()
     stderr_thread.start()
-    process.wait()
     
-    stdout_thread.join(timeout=5)
-    stderr_thread.join(timeout=5)
+    # Wait for process to complete with timeout
+    try:
+        process.wait(timeout=3600)  # 1 hour timeout
+    except subprocess.TimeoutExpired:
+        process.kill()
+        raise Exception(f"Wav2Lip {model_type} inference timed out after 1 hour")
+    
+    # Stop VRAM monitoring and get stats
+    vram_stats = stop_vram_monitoring()
+    inference_end = time.time()
+    wall_clock_time = inference_end - inference_start
     
     stdout_output = "".join(stdout_list)
     stderr_output = "".join(stderr_list)
@@ -234,7 +256,9 @@ def run_inference(python_executable, inference_script, checkpoint_path, video_pa
         raise Exception(f"Output file not generated at: {output_path}")
     
     logger.info(f"✅ {model_type.upper()} inference completed successfully.")
-    return stdout_output, stderr_output
+    logger.info(f"⏱️  Wall-clock time: {wall_clock_time:.2f}s | Peak VRAM: {vram_stats['peak_vram_mb']:.0f}MB")
+    
+    return stdout_output, stderr_output, wall_clock_time, vram_stats
 
 
 def enhance_gan_output(python_executable, input_video, output_video):
@@ -272,7 +296,7 @@ def enhance_gan_output(python_executable, input_video, output_video):
     
     def read_output(pipe, output_list):
         try:
-            for line in pipe:
+            for line in iter(pipe.readline, ''):
                 line = line.strip()
                 if line:
                     logger.debug(f"[FFmpeg] {line}")
@@ -288,7 +312,12 @@ def enhance_gan_output(python_executable, input_video, output_video):
     
     stdout_thread.start()
     stderr_thread.start()
-    process.wait()
+    
+    try:
+        process.wait(timeout=1800)  # 30 minute timeout for ffmpeg
+    except subprocess.TimeoutExpired:
+        process.kill()
+        raise Exception("FFmpeg encoding timed out after 30 minutes")
     
     stdout_thread.join(timeout=5)
     stderr_thread.join(timeout=5)
@@ -308,7 +337,17 @@ def upload_to_s3(local_file, s3_key, bucket_name):
     
     try:
         s3.upload_file(local_file, bucket_name, s3_key)
-        s3_url = f"https://{bucket_name}.s3.amazonaws.com/{s3_key}"
+        
+        # Get the actual region for proper URL construction
+        bucket_location = s3.get_bucket_location(Bucket=bucket_name)
+        region = bucket_location['LocationConstraint']
+        
+        if region is None:
+            region = 'us-east-1'
+        elif region == 'EU':
+            region = 'eu-west-1'
+            
+        s3_url = f"https://{bucket_name}.s3.{region}.amazonaws.com/{s3_key}"
         logger.info(f"✅ Uploaded successfully: {s3_url}")
         return s3_url
     except Exception as e:
@@ -343,6 +382,9 @@ def run_wav2lip_task(self, task_id, video_url, audio_url):
         tasks_collection = mongo.db.lip_sync_tasks
         bucket_name = os.getenv("S3_BUCKET_NAME")
         
+        if not bucket_name:
+            raise Exception("S3_BUCKET_NAME environment variable is not set")
+        
         # Initialize task
         task = LipSyncTask(task_id=task_id, video_url=video_url, audio_url=audio_url)
         task.mark_downloading()
@@ -358,14 +400,21 @@ def run_wav2lip_task(self, task_id, video_url, audio_url):
         # --- 1️⃣ DOWNLOAD INPUT FILES ---
         logger.info("📥 Downloading input files...")
         try:
+            # Download video with timeout and error handling
+            video_response = requests.get(video_url, timeout=60)
+            video_response.raise_for_status()
             with open(video_path, "wb") as f:
-                f.write(requests.get(video_url, timeout=60).content)
+                f.write(video_response.content)
+            
+            # Download audio with timeout and error handling  
+            audio_response = requests.get(audio_url, timeout=60)
+            audio_response.raise_for_status()
             with open(audio_path, "wb") as f:
-                f.write(requests.get(audio_url, timeout=60).content)
+                f.write(audio_response.content)
             
             files_to_cleanup.extend([video_path, audio_path])
             logger.info("✅ Input files downloaded successfully")
-        except Exception as e:
+        except requests.RequestException as e:
             raise Exception(f"Failed to download input files: {e}")
         
         # --- 2️⃣ PROCESSING PHASE ---
@@ -552,6 +601,9 @@ def run_single_wav2lip_task(self, task_id, video_url, audio_url, model_type="non
         tasks_collection = mongo.db.lip_sync_tasks
         bucket_name = os.getenv("S3_BUCKET_NAME")
         
+        if not bucket_name:
+            raise Exception("S3_BUCKET_NAME environment variable is not set")
+        
         task = LipSyncTask(task_id=task_id, video_url=video_url, audio_url=audio_url)
         task.mark_downloading()
         task.save(tasks_collection)
@@ -561,10 +613,15 @@ def run_single_wav2lip_task(self, task_id, video_url, audio_url, model_type="non
         
         # Download inputs
         logger.info("📥 Downloading input files...")
+        video_response = requests.get(video_url, timeout=60)
+        video_response.raise_for_status()
         with open(video_path, "wb") as f:
-            f.write(requests.get(video_url, timeout=60).content)
+            f.write(video_response.content)
+            
+        audio_response = requests.get(audio_url, timeout=60)
+        audio_response.raise_for_status()
         with open(audio_path, "wb") as f:
-            f.write(requests.get(audio_url, timeout=60).content)
+            f.write(audio_response.content)
         
         files_to_cleanup.extend([video_path, audio_path])
         
@@ -585,7 +642,7 @@ def run_single_wav2lip_task(self, task_id, video_url, audio_url, model_type="non
             raise Exception(f"Checkpoint not found: {checkpoint}")
         
         # Run inference
-        stdout_output, stderr_output = run_inference(
+        stdout_output, stderr_output, wall_time, vram_stats = run_inference_with_retry(
             python_executable, inference_script, checkpoint,
             video_path, audio_path, output_path, wav2lip_dir, model_type
         )
