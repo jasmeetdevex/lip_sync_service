@@ -3,9 +3,10 @@ from datetime import datetime
 class LipSyncTask:
     def __init__(self, task_id=None, video_url=None, audio_url=None,
                  status='queued', s3_keys=None, output_s3_urls=None,
-                 models=None, error_log=None, created_at=None, completed_at=None):
+                 models=None, error_log=None, performance_snapshot=None,
+                 created_at=None, completed_at=None):
         """
-        Represents a lip-sync generation task with support for multiple models.
+        Represents a lip-sync generation task with support for multiple models and performance tracking.
 
         :param task_id: Celery task ID
         :param video_url: Input video URL
@@ -15,6 +16,7 @@ class LipSyncTask:
         :param output_s3_urls: List of public URLs for output videos (one per model)
         :param models: List of model names used (e.g., ['Wav2Lip', 'Wav2Lip-GAN'])
         :param error_log: Error logs/stdout/stderr captured during processing
+        :param performance_snapshot: Dict with performance metrics (wall-clock time, VRAM usage)
         :param created_at: Timestamp when task was created
         :param completed_at: Timestamp when task finished
         """
@@ -26,6 +28,7 @@ class LipSyncTask:
         self.output_s3_urls = output_s3_urls or []
         self.models = models or []
         self.error_log = error_log
+        self.performance_snapshot = performance_snapshot or {}
         self.created_at = created_at or datetime.utcnow()
         self.completed_at = completed_at
 

@@ -1,4 +1,3 @@
-# tasks.py
 import os
 import sys
 import requests
@@ -11,9 +10,16 @@ import boto3
 from models.lipSyncTasksModal import LipSyncTask
 import logging
 import threading
+import time
 
 load_dotenv()
 logger = logging.getLogger(__name__)
+
+# Global variables for performance monitoring
+peak_vram = 0
+vram_samples = []
+monitoring = False
+vram_lock = threading.Lock()
 
 # S3 client
 s3 = boto3.client(
@@ -22,6 +28,79 @@ s3 = boto3.client(
     aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
     region_name=os.getenv("AWS_REGION")
 )
+def monitor_vram_usage():
+        """Monitor VRAM usage in background thread"""
+        global peak_vram, vram_samples, monitoring, vram_lock
+        
+        while monitoring:
+            try:
+                result = subprocess.run(
+                    "nvidia-smi --query-gpu=memory.used --format=csv,nounits,noheader",
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                vram_used = float(result.stdout.strip().split()[0])
+                
+                with vram_lock:
+                    vram_samples.append(vram_used)
+                    peak_vram = max(peak_vram, vram_used)
+            except Exception as e:
+                logger.debug(f"VRAM monitoring error: {e}")
+            
+            time.sleep(0.1)  # Sample every 100ms
+
+
+def get_total_gpu_vram():
+    """Get total GPU VRAM available"""
+    try:
+        result = subprocess.run(
+            "nvidia-smi --query-gpu=memory.total --format=csv,nounits,noheader",
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        return float(result.stdout.strip().split()[0])
+    except Exception as e:
+        logger.warning(f"Failed to get total GPU VRAM: {e}")
+        return 0
+
+
+def start_vram_monitoring():
+    """Start background VRAM monitoring"""
+    global peak_vram, vram_samples, monitoring
+    
+    peak_vram = 0
+    vram_samples = []
+    monitoring = True
+    
+    monitor_thread = threading.Thread(target=monitor_vram_usage, daemon=True)
+    monitor_thread.start()
+    time.sleep(0.2)  # Give monitor time to start
+    
+    return monitor_thread
+
+
+def stop_vram_monitoring():
+    """Stop VRAM monitoring and return statistics"""
+    global peak_vram, vram_samples, monitoring, vram_lock
+    
+    monitoring = False
+    time.sleep(0.2)
+    
+    with vram_lock:
+        avg_vram = sum(vram_samples) / len(vram_samples) if vram_samples else 0
+        peak_vram_value = peak_vram
+        sample_count = len(vram_samples)
+    
+    return {
+        "peak_vram_mb": peak_vram_value,
+        "avg_vram_mb": avg_vram,
+        "samples": sample_count
+    }
+
 
 def clean_up(file_paths):
     """Clean up multiple files"""
@@ -31,7 +110,7 @@ def clean_up(file_paths):
                 os.remove(f)
         except Exception as e:
             logger.warning(f"Cleanup failed for {f}: {e}")
-
+    
 
 def run_inference_with_retry(python_executable, inference_script, checkpoint_path, video_path, audio_path, output_path, wav2lip_dir, model_type="non-gan", max_retries=2):
     """
@@ -63,6 +142,7 @@ def run_inference_with_retry(python_executable, inference_script, checkpoint_pat
                         pass
                     continue
             raise
+    
 
 
 def run_inference(python_executable, inference_script, checkpoint_path, video_path, audio_path, output_path, wav2lip_dir, model_type="non-gan", resize_factor=1):
@@ -90,7 +170,7 @@ def run_inference(python_executable, inference_script, checkpoint_path, video_pa
     ]
     
     logger.info(f"⚙️ Executing command: {' '.join(command)}")
-    logger.info(f"Memory optimization: resize_factor=2, batch_size=64")
+    logger.info(f"Memory optimization: resize_factor={resize_factor}, limiting threads")
     
     # Set environment variables for memory optimization
     env = os.environ.copy()
@@ -312,7 +392,7 @@ def run_wav2lip_task(self, task_id, video_url, audio_url):
         logger.info("RUNNING NON-GAN MODEL (Wav2Lip)")
         logger.info("=" * 60)
         
-        stdout_w2l, stderr_w2l = run_inference_with_retry(
+        stdout_w2l, stderr_w2l, time_w2l, vram_w2l = run_inference_with_retry(
             python_executable, inference_script, checkpoint_w2l,
             video_path, audio_path, output_w2l, wav2lip_dir, "non-gan", max_retries=2
         )
@@ -323,7 +403,7 @@ def run_wav2lip_task(self, task_id, video_url, audio_url):
         logger.info("RUNNING GAN MODEL (Wav2Lip-GAN)")
         logger.info("=" * 60)
         
-        stdout_gan, stderr_gan = run_inference_with_retry(
+        stdout_gan, stderr_gan, time_gan, vram_gan = run_inference_with_retry(
             python_executable, inference_script, checkpoint_gan,
             video_path, audio_path, output_gan, wav2lip_dir, "gan", max_retries=2
         )
@@ -380,6 +460,30 @@ def run_wav2lip_task(self, task_id, video_url, audio_url):
             "gan_stdout": stdout_gan,
             "gan_stderr": stderr_gan
         }
+        
+        # Store performance metrics
+        total_gpu_vram = get_total_gpu_vram()
+        task.performance_snapshot = {
+            "w2l": {
+                "wall_clock_time_seconds": time_w2l,
+                "peak_vram_mb": vram_w2l['peak_vram_mb'],
+                "avg_vram_mb": vram_w2l['avg_vram_mb'],
+                "vram_usage_percent": (vram_w2l['peak_vram_mb'] / total_gpu_vram * 100) if total_gpu_vram > 0 else 0
+            },
+            "gan": {
+                "wall_clock_time_seconds": time_gan,
+                "peak_vram_mb": vram_gan['peak_vram_mb'],
+                "avg_vram_mb": vram_gan['avg_vram_mb'],
+                "vram_usage_percent": (vram_gan['peak_vram_mb'] / total_gpu_vram * 100) if total_gpu_vram > 0 else 0
+            },
+            "total_gpu_vram_mb": total_gpu_vram,
+            "timestamp": datetime.utcnow()
+        }
+        
+        logger.info(f"📊 Performance Snapshot:")
+        logger.info(f"  Wav2Lip (Non-GAN): {time_w2l:.2f}s, Peak VRAM: {vram_w2l['peak_vram_mb']:.0f}MB ({task.performance_snapshot['w2l']['vram_usage_percent']:.1f}%)")
+        logger.info(f"  Wav2Lip-GAN: {time_gan:.2f}s, Peak VRAM: {vram_gan['peak_vram_mb']:.0f}MB ({task.performance_snapshot['gan']['vram_usage_percent']:.1f}%)")
+        
         task.save(tasks_collection)
         
         logger.info(f"🏁 Task {task_id} completed successfully with both models!")
