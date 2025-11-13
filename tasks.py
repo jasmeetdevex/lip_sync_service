@@ -116,6 +116,7 @@ def run_inference_with_retry(python_executable, inference_script, checkpoint_pat
     """
     Run Wav2Lip inference with retry logic and progressive memory optimization.
     Retries with increased resize_factor if memory errors occur.
+    Returns: (stdout, stderr, wall_clock_time, vram_stats)
     """
     
     resize_factors = [1, 2, 4]  # Start with better quality, fall back to more memory efficient
@@ -123,12 +124,12 @@ def run_inference_with_retry(python_executable, inference_script, checkpoint_pat
     for attempt, resize_factor in enumerate(resize_factors[:max_retries + 1]):
         try:
             logger.info(f"🔄 Attempt {attempt + 1}/{len(resize_factors[:max_retries + 1])} with resize_factor={resize_factor}")
-            stdout, stderr = run_inference(
+            stdout, stderr, wall_time, vram_stats = run_inference(
                 python_executable, inference_script, checkpoint_path,
                 video_path, audio_path, output_path, wav2lip_dir,
                 model_type, resize_factor
             )
-            return stdout, stderr
+            return stdout, stderr, wall_time, vram_stats
         except Exception as e:
             error_str = str(e)
             if "ArrayMemoryError" in error_str or "out of memory" in error_str.lower():
