@@ -51,7 +51,7 @@ def getTaskStatus():
             "status": task.status,
             "created_at": task.created_at,
             "completed_at": task.completed_at,
-            "output_s3_url": task.output_s3_url,
+            "output_s3_urls": task.output_s3_urls,
             "error_log": task.error_log,
         })
 

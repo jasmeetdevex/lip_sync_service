@@ -67,7 +67,7 @@ def submit_task(video_url, audio_url):
             status="queued",
             created_at=datetime.utcnow(),
             completed_at=None,
-            output_s3_url=None,
+            output_s3_urls=None,
             error_log=None
         )
         
@@ -163,7 +163,7 @@ def get_task_status(task_id):
             "status": task.status,
             "created_at": task.created_at.isoformat() if task.created_at else None,
             "completed_at": task.completed_at.isoformat() if task.completed_at else None,
-            "output_s3_url": task.output_s3_url,
+            "output_s3_urls": task.output_s3_urls,
             "error_log": task.error_log,
         }
     
