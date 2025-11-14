@@ -120,6 +120,26 @@ def clean_up(file_paths):
         except Exception as e:
             logger.warning(f"Cleanup failed for {f}: {e}")
 
+def trigger_upscaling_after_completion(task_id):
+    """
+    Call upscaling service after Wav2Lip completion
+    """
+    try:
+        upscaling_service_url = f"http://localhost:5002/api/upscale/task/{task_id}"
+        
+        response = requests.post(upscaling_service_url, timeout=10)
+        
+        if response.status_code == 200:
+            logger.info(f"🚀 Upscaling triggered for task {task_id}")
+            return True
+        else:
+            logger.warning(f"⚠️ Upscaling trigger failed: {response.json()}")
+            return False
+            
+    except Exception as e:
+        logger.warning(f"⚠️ Could not trigger upscaling: {e}")
+        return False
+
 
 def run_inference_with_retry(python_executable, inference_script, checkpoint_path, video_path, audio_path, output_path, wav2lip_dir, model_type="non-gan", max_retries=2):
     """
@@ -355,7 +375,7 @@ def upload_to_s3(local_file, s3_key, bucket_name):
 
 
 @celery.task(name="run_wav2lip_task", bind=True)
-def run_wav2lip_task(self, task_id, video_url, audio_url):
+def run_wav2lip_task(self, task_id, video_url, audio_url ,enable_upscaling=True ):
     """
     Celery Task:
     Runs both Wav2Lip (Non-GAN) and Wav2Lip-GAN models,
@@ -504,6 +524,8 @@ def run_wav2lip_task(self, task_id, video_url, audio_url):
             output_s3_urls=[s3_url_w2l, s3_url_gan],
             models=["Wav2Lip", "Wav2Lip-GAN"]
         )
+        if enable_upscaling:
+            trigger_upscaling_after_completion(task_id)
         task.error_log = {
             "w2l_stdout": stdout_w2l,
             "w2l_stderr": stderr_w2l,
@@ -542,6 +564,7 @@ def run_wav2lip_task(self, task_id, video_url, audio_url):
             "success": True,
             "task_id": task_id,
             "results": results,
+             "upscaling_triggered": enable_upscaling,
             "message": "Both Wav2Lip and Wav2Lip-GAN outputs generated and uploaded"
         }
     
