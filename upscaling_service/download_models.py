@@ -1,102 +1,83 @@
-#!/usr/bin/env python3
-"""
-Script to download pretrained models for the video upscaling service.
-This script downloads the necessary model weights for GFPGAN and Real-ESRGAN.
-"""
-
 import os
+import boto3
 import requests
-from pathlib import Path
+
+S3_BUCKET = "my-ml-models"   # <-- CHANGE THIS
+UPLOAD_TO_S3 = False         # Set True if you want to upload models after download
 
 
-def download_file(url, destination):
-    """
-    Download a file from URL to destination with progress indication.
+# ---------------------------
+# Model download registry
+# ---------------------------
 
-    Args:
-        url (str): URL to download from
-        destination (str): Local path to save the file
-    """
-    print(f"Downloading {os.path.basename(destination)}...")
+models = {
+    # GFPGAN + RealESRGAN
+    'upscaling_service/weights/GFPGANv1.4.pth':
+        'https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.4.pth',
 
-    try:
-        response = requests.get(url, stream=True)
-        response.raise_for_status()
+    'upscaling_service/weights/RealESRGAN_x2plus.pth':
+        'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth',
 
-        # Get total file size
-        total_size = int(response.headers.get('content-length', 0))
+    'upscaling_service/weights/RealESRGAN_x4plus.pth':
+        'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth',
 
-        # Download with progress
-        downloaded = 0
-        with open(destination, 'wb') as file:
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    file.write(chunk)
-                    downloaded += len(chunk)
-                    if total_size > 0:
-                        progress = (downloaded / total_size) * 100
-                        print(f"{progress:.1f}%", end='', flush=True)
+    'upscaling_service/gfpgan/weights/detection_Resnet50_Final.pth':
+        'https://github.com/xinntao/facexlib/releases/download/v0.1.0/detection_Resnet50_Final.pth',
 
-        print(" ✓ Done")
-    except Exception as e:
-        print(f" ✗ Failed to download {os.path.basename(destination)}: {e}")
-        return False
+    'upscaling_service/gfpgan/weights/parsing_parsenet.pth':
+        'https://huggingface.co/gmk123/GFPGAN/resolve/main/parsing_parsenet.pth?download=true',
 
-    return True
+    # Wav2Lip
+    'Wav2Lip/checkpoints/wav2lip.pth':
+        'https://huggingface.co/numz/wav2lip_studio/resolve/main/Wav2lip/wav2lip.pth?download=true'
+}
 
 
-def download_models():
-    """Download all required model weights."""
+def download_file(url, dest_path):
+    """ Download a file with streaming mode (handles HuggingFace redirects). """
+    print(f"➡️ Downloading: {url}")
+    
+    resp = requests.get(url, stream=True, allow_redirects=True)
+    resp.raise_for_status()
 
-    # Create weights directory if it doesn't exist
-    weights_dir = Path('weights')
-    weights_dir.mkdir(exist_ok=True)
+    with open(dest_path, "wb") as f:
+        for chunk in resp.iter_content(1024 * 1024):
+            if chunk:
+                f.write(chunk)
 
-    gfpgan_weights_dir = Path('gfpgan/weights')
-    gfpgan_weights_dir.mkdir(parents=True, exist_ok=True)
-
-    # Model URLs and destinations
-    models = {
-        'weights/GFPGANv1.4.pth': 'https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.4.pth',
-        'weights/RealESRGAN_x2plus.pth': 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth',
-        'weights/RealESRGAN_x4plus.pth': 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth',
-        'gfpgan/weights/detection_Resnet50_Final.pth': 'https://github.com/xinntao/facexlib/releases/download/v0.1.0/detection_Resnet50_Final.pth',
-        'gfpgan/weights/parsing_parsenet.pth': 'https://huggingface.co/gmk123/GFPGAN/resolve/main/parsing_parsenet.pth?download=true',
-    }
-
-    print("Starting model downloads...\n")
-
-    success_count = 0
-    total_count = len(models)
-
-    for model_path, url in models.items():
-        if os.path.exists(model_path):
-            print(f"✓ {os.path.basename(model_path)} already exists")
-            success_count += 1
-            continue
-
-        if download_file(url, model_path):
-            success_count += 1
-
-    print(f"\nDownloaded {success_count}/{total_count} models successfully!")
-
-    if success_count == total_count:
-        print("All models are ready!")
-        return True
-    else:
-        print(f"Failed to download {total_count - success_count} models.")
-        return False
+    print(f"✔ Download complete: {dest_path}")
 
 
-if __name__ == '__main__':
-    print("Video Upscaling Service - Model Downloader")
-    print("=" * 50)
+def ensure_directory(path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
 
-    success = download_models()
 
-    if success:
-        print("\nYou can now run the video enhancement service!")
-        print("Example: python enhance.py -i input.mp4 -o output.mp4")
-    else:
-        print("\nSome models failed to download. Please check your internet connection and try again.")
-        exit(1)
+def upload_to_s3(local_path, s3_key):
+    s3 = boto3.client("s3")
+    print(f"⬆ Uploading to S3: s3://{S3_BUCKET}/{s3_key}")
+    s3.upload_file(local_path, S3_BUCKET, s3_key)
+    print("✔ Upload complete")
+
+
+def main():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    for rel_path, url in models.items():
+        abs_path = os.path.join(base_dir, rel_path)
+
+        ensure_directory(abs_path)
+
+        # Skip if file already exists
+        if os.path.exists(abs_path) and os.path.getsize(abs_path) > 0:
+            print(f"✔ Already exists, skipping: {rel_path}")
+        else:
+            download_file(url, abs_path)
+
+        # Upload to S3 if enabled
+        if UPLOAD_TO_S3:
+            upload_to_s3(abs_path, rel_path)
+
+
+
+if __name__ == "__main__":
+    main()
