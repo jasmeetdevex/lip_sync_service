@@ -4,7 +4,7 @@
 Worker startup script - MUST import from app.py to ensure Flask context
 Run with: python worker.py
 """
-from app import app, celery
+from app import celery
 
 if __name__ == '__main__':
     celery.worker_main([
