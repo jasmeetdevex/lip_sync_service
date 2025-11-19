@@ -520,7 +520,7 @@ def trigger_upscaling_with_output(task_id, output_video_path, model_type="wav2li
         logger.info(f"📤 Sending to upscaling service: {file_size_mb:.2f} MB")
         
         # Import upscaling service
-        from upscaling_service.app import run_upscale_task, app as upscale_app
+        from upscaling_service.upscaling_app import run_upscale_task, app as upscale_app
         
         # Update task status
         task.mark_upscaling_started()

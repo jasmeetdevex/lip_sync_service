@@ -7,7 +7,7 @@ from models.lipSyncTasksModal import LipSyncTask
 from extensions import mongo
 import logging
 
-
+is_testing  =False
 logger = logging.getLogger(__name__)
 
 
@@ -68,8 +68,15 @@ def submit_task(video_url, audio_url):
             created_at=datetime.utcnow(),
             completed_at=None,
             output_s3_urls=None,
-            error_log=None
+            error_log=None,
         )
+        if is_testing:
+            task.mark_completed(
+                s3_keys="testing key",
+            output_s3_urls=['https://narratix-media.s3.us-east-1.amazonaws.com/upscaled_outputs/5dc7a319-ce4b-4dc5-8a3c-bf40b5c8797e/model_1_sync_0p00s.mp4'],
+            models=[f"Wav2Lip"]
+            )
+            task.mark_upscaling_completed(["https://narratix-media.s3.us-east-1.amazonaws.com/upscaled_outputs/5dc7a319-ce4b-4dc5-8a3c-bf40b5c8797e/model_1_sync_0p00s.mp4"])
         
         # Save to MongoDB
         result = tasks_collection.insert_one(task.to_dict())
@@ -81,19 +88,19 @@ def submit_task(video_url, audio_url):
         
         # Submit background Celery task
         # Use .apply_async for more control over task submission
-        celery_result = run_wav2lip_task.apply_async(   
-            args=[task_id, video_url.strip(), audio_url.strip()],
-            task_id=task_id,  # Use same ID for tracking
-            retry=True,
-            retry_policy={
-                'max_retries': 3,
-                'interval_start': 1,
-                'interval_step': 0.2,
-                'interval_max': 0.2,
-            }
-        )
-        
-        logger.info(f"Celery task queued with ID: {celery_result.id}")
+        if not is_testing:
+            celery_result = run_wav2lip_task.apply_async(   
+                args=[task_id, video_url.strip(), audio_url.strip()],
+                task_id=task_id,  # Use same ID for tracking
+                retry=True,
+                retry_policy={
+                    'max_retries': 3,
+                    'interval_start': 1,
+                    'interval_step': 0.2,
+                    'interval_max': 0.2,
+                }
+            )
+            logger.info(f"Celery task queued with ID: {celery_result.id}")
         
         return {
             "success": True,
