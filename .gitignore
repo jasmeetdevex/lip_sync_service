@@ -75,3 +75,157 @@ Thumbs.db
 # =========================================
 .env
 .env.local
+
+
+
+# Byte-compiled / optimized / DLL files
+upscaling_service/__pycache__/
+upscaling_service/*.py[cod]
+upscaling_service/*$py.class
+
+# C extensions
+upscaling_service/*.so
+
+# Distribution / packaging
+upscaling_service/.Python
+upscaling_service/build/
+upscaling_service/develop-eggs/
+upscaling_service/dist/
+upscaling_service/downloads/
+upscaling_service/eggs/
+upscaling_service/.eggs/
+upscaling_service/lib/
+upscaling_service/lib64/
+upscaling_service/parts/
+upscaling_service/sdist/
+upscaling_service/var/
+upscaling_service/wheels/
+upscaling_service/*.egg-info/
+upscaling_service/.installed.cfg
+upscaling_service/*.egg
+upscaling_service/MANIFEST
+
+# PyInstaller
+upscaling_service/*.manifest
+upscaling_service/*.spec
+
+# Installer logs
+upscaling_service/pip-log.txt
+upscaling_service/pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+upscaling_service/htmlcov/
+upscaling_service/.tox/
+upscaling_service/.coverage
+upscaling_service/.coverage.*
+upscaling_service/.cache
+upscaling_service/nosetests.xml
+upscaling_service/coverage.xml
+upscaling_service/*.cover
+upscaling_service/.hypothesis/
+upscaling_service/.pytest_cache/
+
+# Translations
+upscaling_service/*.mo
+upscaling_service/*.pot
+
+# Django stuff:
+upscaling_service/*.log
+upscaling_service/local_settings.py
+upscaling_service/db.sqlite3
+
+# Flask stuff:
+upscaling_service/instance/
+upscaling_service/.webassets-cache
+
+# Scrapy stuff:
+upscaling_service/.scrapy
+
+# Sphinx documentation
+upscaling_service/docs/_build/
+
+# PyBuilder
+upscaling_service/target/
+
+# Jupyter Notebook
+upscaling_service/.ipynb_checkpoints
+
+# pyenv
+upscaling_service/.python-version
+
+# celery beat schedule file
+upscaling_service/celerybeat-schedule
+
+# SageMath parsed files
+upscaling_service/*.sage.py
+
+# Environments
+upscaling_service/.env
+upscaling_service/.venv
+upscaling_service/env/
+upscaling_service/venv/
+upscaling_service/ENV/
+upscaling_service/env.bak/
+upscaling_service/venv.bak/
+
+# Spyder project settings
+upscaling_service/.spyderproject
+upscaling_service/.spyproject
+
+# Rope project settings
+upscaling_service/.ropeproject
+
+# mkdocs documentation
+upscaling_service/site
+
+# mypy
+upscaling_service/.mypy_cache/
+upscaling_service/.dmypy.json
+upscaling_service/dmypy.json
+
+# Pyre type checker
+upscaling_service/.pyre/
+
+# IDEs
+upscaling_service/.vscode/
+upscaling_service/.idea/
+upscaling_service/*.swp
+upscaling_service/*.swo
+upscaling_service/*~
+
+# OS generated files
+upscaling_service/.DS_Store
+upscaling_service/.DS_Store?
+upscaling_service._*
+upscaling_service/.Spotlight-V100
+upscaling_service/.Trashes
+upscaling_service/ehthumbs.db
+upscaling_service/Thumbs.db
+
+# Logs
+upscaling_service/logs/
+
+# Weights and models
+upscaling_service/weights/
+upscaling_service/*.pth
+upscaling_service/gfpgan/weights/
+upscaling_service/*.pth
+
+# Upscaled results
+upscaling_service/upscaled results/
+
+# Temporary files
+upscaling_service/*.tmp
+upscaling_service/*.temp
+
+# Node modules (if any)
+upscaling_service/node_modules/
+
+# Database files
+upscaling_service/*.db
+upscaling_service/*.sqlite
+upscaling_service/*.sqlite3
+
+# Secrets
+upscaling_service/secrets.json
+upscaling_service/config.json

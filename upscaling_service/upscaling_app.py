@@ -363,28 +363,7 @@ def run_upscale_task(task_id, video_file, model_type, app_context):
             # Save uploaded video file to temp location
             local_input_path = os.path.join(temp_dir, f"{task_id}_input.mp4")
             print(f"🔍 [DEBUG] Saving video to: {local_input_path}")
-            
-            # FIX: Handle different file object types properly
-            if hasattr(video_file, 'save'):
-                # Flask FileStorage object
-                video_file.save(local_input_path)
-            elif hasattr(video_file, 'read'):
-                # File-like object (BufferedReader, BytesIO, etc.)
-                # Reset to beginning if it's seekable
-                if hasattr(video_file, 'seek'):
-                    video_file.seek(0)
-                
-                # Read the file content and write to disk
-                with open(local_input_path, 'wb') as f:
-                    # Read in chunks to handle large files efficiently
-                    chunk_size = 8192
-                    while True:
-                        chunk = video_file.read(chunk_size)
-                        if not chunk:
-                            break
-                        f.write(chunk)
-            else:
-                raise ValueError(f"Unsupported file object type: {type(video_file)}")
+            video_file.save(local_input_path)
             
             input_size_mb = os.path.getsize(local_input_path) / (1024**2)
             print(f"🔍 [DEBUG] Video saved. Size: {input_size_mb:.2f} MB")
@@ -634,7 +613,7 @@ def apply_audio_sync_offsets(input_path, task_id, logger=None):
     """
     Generate audio sync variations with different offsets.
     Default offset is 0.00s (as per client request).
-    All offsets uploaded to S3.
+    All offsets uploaded to S3 and saved to MongoDB.
     """
     if logger is None:
         logger = logging.getLogger(__name__)
@@ -719,6 +698,20 @@ def apply_audio_sync_offsets(input_path, task_id, logger=None):
             logger.warning(f"Error processing offset {offset}s: {e}")
 
     print(f"🔍 [DEBUG] Generated {len(upscaled_urls)} sync variations")
+    
+    # Save upscaled URLs to MongoDB in upscaled_output_urls array
+    if upscaled_urls:
+        try:
+            mongo.db.lip_sync_tasks.update_one(
+                {"task_id": task_id},
+                {"$set": {"upscaled_output_urls": upscaled_urls}}
+            )
+            logger.info(f"✅ Saved {len(upscaled_urls)} upscaled URLs to MongoDB")
+            print(f"🔍 [DEBUG] Successfully saved upscaled URLs to MongoDB")
+        except Exception as e:
+            print(f"🔍 [DEBUG] Error saving URLs to MongoDB: {str(e)}")
+            logger.error(f"❌ Failed to save upscaled URLs to MongoDB: {e}")
+    
     return upscaled_urls
 
 def upload_to_s3(local_path, s3_key, logger=None):
