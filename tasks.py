@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from extensions import mongo
 from datetime import datetime
 import subprocess
+import shutil
 import boto3
 from models.lipSyncTasksModal import LipSyncTask
 import logging
@@ -127,16 +128,26 @@ def get_video_framerate_info(video_path):
     """Get video frame rate information using ffprobe"""
     logger.info(f"📊 Probing video frame rate info: {video_path}")
     
+    # Preflight checks
+    if not os.path.exists(video_path):
+        logger.error(f"Video file not found: {video_path}")
+        return None
+
+    # Ensure ffprobe is available
+    ffprobe_exe = os.getenv("FFPROBE_PATH") or shutil.which("ffprobe")
+    if not ffprobe_exe:
+        logger.error("ffprobe executable not found. Please install FFmpeg and make sure 'ffprobe' is on PATH or set FFPROBE_PATH environment variable.")
+        return None
+
     try:
-        result = subprocess.run(
-            [
-                "ffprobe",
-                "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "stream=avg_frame_rate,r_frame_rate,codec_time_base",
-                "-of", "default=nw=1",
-                video_path
-            ],
+        result = subprocess.run([
+            ffprobe_exe,
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=avg_frame_rate,r_frame_rate,codec_time_base",
+            "-of", "default=nw=1",
+            video_path
+        ],
             capture_output=True,
             text=True,
             timeout=10
@@ -158,8 +169,17 @@ def convert_video_to_cfr25(input_video, output_video):
     """Convert face video to constant frame rate 25fps with yuv420p pixel format"""
     logger.info("🎥 Converting video to constant frame rate 25fps with CFR encoding...")
     
+    # preflight: check input exists
+    if not os.path.exists(input_video):
+        raise Exception(f"Input video file not found: {input_video}")
+
+    # find ffmpeg
+    ffmpeg_exe = os.getenv("FFMPEG_PATH") or shutil.which("ffmpeg")
+    if not ffmpeg_exe:
+        raise Exception("'ffmpeg' not found. Please install FFmpeg and add it to PATH or set FFMPEG_PATH environment variable.")
+
     command = [
-        "ffmpeg",
+        ffmpeg_exe,
         "-y",
         "-i", input_video,
         "-r", "25",
@@ -224,8 +244,15 @@ def resample_audio_to_16k(input_audio, output_audio):
     """Resample audio to 16 kHz mono (Wav2Lip expects this)"""
     logger.info("🔊 Resampling audio to 16 kHz mono...")
     
+    if not os.path.exists(input_audio):
+        raise Exception(f"Input audio file not found: {input_audio}")
+
+    ffmpeg_exe = os.getenv("FFMPEG_PATH") or shutil.which("ffmpeg")
+    if not ffmpeg_exe:
+        raise Exception("'ffmpeg' not found. Please install FFmpeg and add it to PATH or set FFMPEG_PATH environment variable.")
+
     command = [
-        "ffmpeg",
+        ffmpeg_exe,
         "-y",
         "-i", input_audio,
         "-ac", "1",
@@ -431,8 +458,15 @@ def enhance_gan_output(python_executable, input_video, output_video):
     """Enhance GAN output with higher-quality encoding (CRF 17)"""
     logger.info("🎥 Enhancing GAN output with H.264 encoding...")
     
+    if not os.path.exists(input_video):
+        raise Exception(f"GAN input video not found: {input_video}")
+
+    ffmpeg_exe = os.getenv("FFMPEG_PATH") or shutil.which("ffmpeg")
+    if not ffmpeg_exe:
+        raise Exception("'ffmpeg' not found. Please install FFmpeg and add it to PATH or set FFMPEG_PATH environment variable.")
+
     command = [
-        "ffmpeg",
+        ffmpeg_exe,
         "-y",
         "-i", input_video,
         "-c:v", "libx264",
