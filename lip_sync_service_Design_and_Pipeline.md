@@ -7,9 +7,19 @@
 - Notes: This commit contains the last *acceptable* demo configuration and command updates for Wav2Lip at the time of the demo (invocation uses the Wav2Lip inference script via the service tasks).
 
 ## Current stable snapshot (post-fix)
-- Commit: bd1d81c35378b32b0dc0b3e2757de33aae50dbaf
-- Author date: Thu Nov 13 17:08:12 2025 +0530
-- Reason it's stable: Fixes in `tasks.py` add robust error handling for downloads, VRAM monitoring, retry and timeout handling for inference/ffmpeg, S3 region-correct URL construction, and safer cleanup logic. These changes improved reliability and are considered the most stable lip-sync state now.
+## Current stable snapshot (most recent / post-fix)
+ Commit: a8b0e581a6668b42ed04f69b5d02339b6d54e9e3 (HEAD)
+ Author date: Tue Dec 2 16:02:09 2025 +0530
+ Reason it's stable: Additional fixes landed in both `Controllers/lip_sync_controller.py` and `tasks.py`. These changes make the service easier to test and more robust when executed both synchronously and as queued Celery jobs.
+
+Summary of notable changes in this commit:
+ `Controllers/lip_sync_controller.py`:
+  - `is_testing` now reads the environment (`ENV`) so test-mode is set unless running in production.
+  - `run_task_directly` now uses the Celery task's `.run(None, ...)` form to execute the bound task function synchronously during tests.
+  - `submit_task` now queues tasks via `run_wav2lip_task.apply_async(...)` instead of directly calling the task function — this ensures tasks run through the Celery runtime path when expected.
+ `tasks.py`:
+  - `run_wav2lip_task` is now registered as a Celery task with `@celery.task(name="run_wav2lip_task", bind=True)`, so `apply_async` and all Celery semantics work correctly.
+  - This commit also sets a default pipeline behaviour (`enable_upscaling=True`) and keeps the multi-model, retry-safe pipeline. Together with prior fixes (timeouts, VRAM monitoring, S3 URL region correctness), this makes the pipeline the most stable lip-sync state.
 
 Example working `task_id` used in testing: `cdde5238-bdb8-4ae3-aa39-d90aa375177a`
 
