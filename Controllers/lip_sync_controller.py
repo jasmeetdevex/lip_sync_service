@@ -15,7 +15,9 @@ from models.lipSyncTasksModal import LipSyncTask
 from extensions import mongo
 import logging
 import os
-is_testing  =True
+
+is_testing = os.getenv("ENV") != "production"
+
 logger = logging.getLogger(__name__)
 s3_client = boto3.client(
 's3',
@@ -40,8 +42,9 @@ def run_task_directly(video_url, audio_url, use_hd=False):
     task_id = f"test_{uuid.uuid4()}"
     
     # Call the Celery task function directly without .apply_async
-    # Pass None as 'self' because Celery binds the task to 'self'
-    result = run_wav2lip_task(None, task_id, video_url, audio_url, use_hd)
+    # When the task is decorated with @celery.task(bind=True) it becomes a Task object.
+    # Use .run(None, ...) to execute the underlying function synchronously (pass None for self).
+    result = run_wav2lip_task.run(None, task_id, video_url, audio_url, use_hd)
     
     return result
 
@@ -134,7 +137,8 @@ def submit_task(video_url, audio_url):
             print(f"   - video_url: {video_url[:50]}...")
             print(f"   - audio_url: {audio_url[:50]}...")
             
-            celery_result = run_wav2lip_task(   
+            # Queue the task into Celery as an async job
+            celery_result = run_wav2lip_task.apply_async(
                 args=[task_id, video_url.strip(), audio_url.strip()],
                 task_id=task_id,
                 retry=True,

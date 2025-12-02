@@ -550,7 +550,8 @@ def trigger_upscaling_with_output(task_id, output_video_path, model_type="wav2li
         return False
 
 # ========== CELERY TASKS ==========
-# @celery.task(name="run_wav2lip_task", bind=True)
+# Register this function as a Celery task so it can be queued via apply_async
+@celery.task(name="run_wav2lip_task", bind=True)
 def run_wav2lip_task(self, task_id, video_url, audio_url, enable_upscaling=True, enable_gan=False):
     """
     Celery Task: Complete Wav2Lip pipeline with direct upscaling integration
