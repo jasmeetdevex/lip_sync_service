@@ -13,7 +13,7 @@ import logging
 import threading
 import time
 import json
-
+import tempfile
 load_dotenv()
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,22 @@ s3 = boto3.client(
     aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
     region_name=os.getenv("AWS_REGION")
 )
+
+
+def lipsync_enabled():
+    """Read the feature flag from environment to determine if lipsync is enabled.
+
+    Priority: ENABLE_LIPSYNC env var -> ALLOWED_VIDEO_FORMATS -> default True
+    """
+    v = os.getenv("ENABLE_LIPSYNC")
+    if v is not None:
+        return str(v).lower() in ("1", "true", "yes")
+
+    allowed = os.getenv("ALLOWED_VIDEO_FORMATS")
+    if allowed:
+        return "lipsync" in [x.strip().lower() for x in allowed.split(",")]
+
+    return True
 
 # ========== VRAM MONITORING ==========
 def monitor_vram_usage():
@@ -600,6 +616,21 @@ def run_wav2lip_task(self, task_id, video_url, audio_url, enable_upscaling=True,
     7. Upscaling service handles further enhancement and re-uploads
     """
     logger.info(f"🎬 Starting Wav2Lip task: {task_id} | GAN Enabled: {enable_gan}")
+
+    # Enforce feature-flag: respect service-level disable
+    if not lipsync_enabled():
+        logger.info(f"⚠️ Lipsync feature is disabled; marking task {task_id} failed and exiting early.")
+        try:
+            tasks_collection = mongo.db.lip_sync_tasks
+            tasks_collection.update_one(
+                {"task_id": task_id},
+                {"$set": {"status": "failed", "error_log": "Lipsync disabled by configuration", "completed_at": datetime.utcnow()}},
+                upsert=False
+            )
+        except Exception as e:
+            logger.warning(f"Could not mark task failed in DB for {task_id}: {e}")
+
+        return {"success": False, "task_id": task_id, "error": "Lipsync disabled by configuration"}
     
     SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
     
@@ -775,6 +806,7 @@ def run_wav2lip_task(self, task_id, video_url, audio_url, enable_upscaling=True,
         clean_up([video_path, audio_path, video_cfr_path, audio_16k_path])
 
 
+
 @celery.task(name="run_single_wav2lip_task", bind=True)
 def run_single_wav2lip_task(self, task_id, video_url, audio_url, model_type="non-gan", enable_upscaling=True):
     """
@@ -796,6 +828,20 @@ def run_single_wav2lip_task(self, task_id, video_url, audio_url, model_type="non
     """
     
     logger.info(f"🎬 Starting Single {model_type.upper()} task: {task_id}")
+
+    if not lipsync_enabled():
+        logger.info(f"⚠️ Lipsync feature is disabled; exiting single task {task_id} early.")
+        try:
+            tasks_collection = mongo.db.lip_sync_tasks
+            tasks_collection.update_one(
+                {"task_id": task_id},
+                {"$set": {"status": "failed", "error_log": "Lipsync disabled by configuration", "completed_at": datetime.utcnow()}},
+                upsert=False
+            )
+        except Exception as e:
+            logger.warning(f"Could not mark single task failed in DB for {task_id}: {e}")
+
+        return {"success": False, "task_id": task_id, "error": "Lipsync disabled by configuration"}
     
     SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
     

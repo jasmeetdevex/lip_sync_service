@@ -363,7 +363,11 @@ def run_upscale_task(task_id, video_file, model_type, app_context):
             # Save uploaded video file to temp location
             local_input_path = os.path.join(temp_dir, f"{task_id}_input.mp4")
             print(f"🔍 [DEBUG] Saving video to: {local_input_path}")
-            video_file.save(local_input_path)
+            
+            # Handle BytesIO object (file-like object from trigger_upscaling_with_output)
+            with open(local_input_path, 'wb') as f:
+                video_file.seek(0)  # Ensure we're at the start of the stream
+                f.write(video_file.read())
             
             input_size_mb = os.path.getsize(local_input_path) / (1024**2)
             print(f"🔍 [DEBUG] Video saved. Size: {input_size_mb:.2f} MB")
